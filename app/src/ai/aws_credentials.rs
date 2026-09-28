@@ -283,11 +283,12 @@ pub(crate) fn refresh_local_chain_aws_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    if matches!(
-        manager.aws_credentials_refresh_strategy(),
-        AwsCredentialsRefreshStrategy::OidcManaged { .. }
-    ) {
-        return Box::pin(async { Ok(()) });
+    let strategy_generation = manager.aws_credentials_strategy_generation();
+    match manager.aws_credentials_refresh_strategy() {
+        AwsCredentialsRefreshStrategy::LocalChain => {}
+        AwsCredentialsRefreshStrategy::OidcManaged { .. } => {
+            return Box::pin(async { Ok(()) });
+        }
     }
 
     // Credential loading is a background `ApiKeyManager` job with no window behind it, and
@@ -324,8 +325,11 @@ pub(crate) fn refresh_local_chain_aws_credentials(
                     (state, Err(message))
                 }
             };
-            manager.set_aws_credentials_state(new_state, ctx);
-            let _ = tx.send(tx_result);
+            if manager.commit_aws_credentials_refresh(strategy_generation, new_state, ctx) {
+                let _ = tx.send(tx_result);
+            } else {
+                let _ = tx.send(Err("AWS credential refresh was superseded".to_string()));
+            }
         },
     );
     Box::pin(async move {
@@ -341,6 +345,7 @@ pub(crate) fn refresh_aws_credentials_oidc(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
+    let strategy_generation = manager.aws_credentials_strategy_generation();
     // Skip if credentials are already loaded and have not yet expired.
     if let AwsCredentialsState::Loaded { credentials, .. } = manager.aws_credentials_state() {
         let still_valid = credentials
@@ -406,17 +411,15 @@ pub(crate) fn refresh_aws_credentials_oidc(
             ))
         },
         move |manager, result, ctx| {
+            let loaded_successfully = result.is_ok();
             let (new_state, tx_result) = match result {
-                Ok(credentials) => {
-                    log::info!("Bedrock OIDC: credentials loaded successfully");
-                    (
-                        AwsCredentialsState::Loaded {
-                            credentials,
-                            loaded_at: SystemTime::now(),
-                        },
-                        Ok(()),
-                    )
-                }
+                Ok(credentials) => (
+                    AwsCredentialsState::Loaded {
+                        credentials,
+                        loaded_at: SystemTime::now(),
+                    },
+                    Ok(()),
+                ),
                 Err(e) => {
                     let message = e.to_string();
                     report_error!(e.context("Bedrock OIDC: failed to load credentials"));
@@ -428,8 +431,14 @@ pub(crate) fn refresh_aws_credentials_oidc(
                     )
                 }
             };
-            manager.set_aws_credentials_state(new_state, ctx);
-            let _ = tx.send(tx_result);
+            if manager.commit_aws_credentials_refresh(strategy_generation, new_state, ctx) {
+                if loaded_successfully {
+                    log::info!("Bedrock OIDC: credentials loaded successfully");
+                }
+                let _ = tx.send(tx_result);
+            } else {
+                let _ = tx.send(Err("AWS credential refresh was superseded".to_string()));
+            }
         },
     );
     Box::pin(async move {

@@ -45,6 +45,62 @@ fn switching_to_oidc_clears_loaded_aws_credentials() {
 }
 
 #[test]
+fn stale_aws_credential_refresh_cannot_overwrite_new_strategy_state() {
+    warpui_core::App::test((), |mut app| async move {
+        let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
+        let stale_generation = manager.read(&app, |manager, _| {
+            manager.aws_credentials_strategy_generation()
+        });
+        let oidc_credentials = AwsCredentials::new(
+            "oidc-access-key".into(),
+            "oidc-secret-key".into(),
+            Some("oidc-session-token".into()),
+            Some(SystemTime::now() + Duration::from_secs(3600)),
+        );
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_aws_credentials_refresh_strategy(
+                AwsCredentialsRefreshStrategy::OidcManaged {
+                    task_id: Some("task-1".into()),
+                    role_arn: "arn:aws:iam::123456789012:role/Bedrock".into(),
+                    region: "us-east-1".into(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: oidc_credentials.clone(),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+
+            let committed = manager.commit_aws_credentials_refresh(
+                stale_generation,
+                AwsCredentialsState::Loaded {
+                    credentials: AwsCredentials::new(
+                        "runtime-access-key".into(),
+                        "runtime-secret-key".into(),
+                        Some("runtime-session-token".into()),
+                        Some(SystemTime::now() + Duration::from_secs(3600)),
+                    ),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            assert!(!committed);
+        });
+
+        manager.read(&app, |manager, _| {
+            let AwsCredentialsState::Loaded { credentials, .. } = manager.aws_credentials_state()
+            else {
+                panic!("OIDC credentials should remain loaded");
+            };
+            assert_eq!(credentials, &oidc_credentials);
+        });
+    });
+}
+#[test]
 fn llm_provider_parses_supported_api_key_provider_names() {
     assert_eq!(
         LLMProvider::from_api_key_slug("anthropic"),
@@ -167,6 +223,7 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         geap_last_mint_failure: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+        aws_credentials_strategy_generation: 0,
         geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
