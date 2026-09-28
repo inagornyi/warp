@@ -155,45 +155,50 @@ fn pinned_workload_token_is_withheld_unless_it_outlives_the_deadline() {
 }
 
 #[test]
-fn concurrent_workload_token_requests_share_a_refresh() {
-    for expired_cache in [false, true] {
-        block_on(async {
-            let client = client();
-            let valid_until = Utc::now() + Duration::minutes(5);
-            if expired_cache {
-                client.set_ambient_workload_token_for_test(
-                    "expired".to_string(),
-                    Some(Utc::now() - Duration::seconds(1)),
-                );
-            }
-            let (release, wait) = oneshot::channel();
-            let mut first = pin!(client.workload_token_valid_until_with(
-                valid_until,
-                AMBIENT_WORKLOAD_TOKEN_DURATION,
-                |duration| async move {
-                    assert_eq!(duration, Some(AMBIENT_WORKLOAD_TOKEN_DURATION));
-                    wait.await.unwrap();
-                    Ok(WorkloadToken {
-                        token: "refreshed".to_string(),
-                        expires_at: Some(valid_until + Duration::hours(1)),
-                    })
-                },
-            ));
-            let mut second = pin!(client.workload_token_valid_until_with(
-                valid_until,
-                AMBIENT_WORKLOAD_TOKEN_DURATION,
-                |_| async { panic!("a concurrent caller must reuse the refreshed token") },
-            ));
+fn concurrent_workload_token_requests_with_cold_cache_share_a_refresh() {
+    assert_concurrent_workload_token_requests_share_a_refresh(client());
+}
 
-            assert!(poll!(&mut first).is_pending());
-            assert!(poll!(&mut second).is_pending());
-            release.send(()).unwrap();
+#[test]
+fn concurrent_workload_token_requests_with_expired_cache_share_a_refresh() {
+    let client = client();
+    client.set_ambient_workload_token_for_test(
+        "expired".to_string(),
+        Some(Utc::now() - Duration::seconds(1)),
+    );
+    assert_concurrent_workload_token_requests_share_a_refresh(client);
+}
 
-            let (first, second) = join!(first, second);
-            assert_eq!(first.unwrap().unwrap().token, "refreshed");
-            assert_eq!(second.unwrap().unwrap().token, "refreshed");
-        });
-    }
+fn assert_concurrent_workload_token_requests_share_a_refresh(client: BaseClient) {
+    block_on(async {
+        let valid_until = Utc::now() + Duration::minutes(5);
+        let (release, wait) = oneshot::channel();
+        let mut first = pin!(client.workload_token_valid_until_with(
+            valid_until,
+            AMBIENT_WORKLOAD_TOKEN_DURATION,
+            |duration| async move {
+                assert_eq!(duration, Some(AMBIENT_WORKLOAD_TOKEN_DURATION));
+                wait.await.unwrap();
+                Ok(WorkloadToken {
+                    token: "refreshed".to_string(),
+                    expires_at: Some(valid_until + Duration::hours(1)),
+                })
+            },
+        ));
+        let mut second = pin!(client.workload_token_valid_until_with(
+            valid_until,
+            AMBIENT_WORKLOAD_TOKEN_DURATION,
+            |_| async { panic!("a concurrent caller must reuse the refreshed token") },
+        ));
+
+        assert!(poll!(&mut first).is_pending());
+        assert!(poll!(&mut second).is_pending());
+        release.send(()).unwrap();
+
+        let (first, second) = join!(first, second);
+        assert_eq!(first.unwrap().unwrap().token, "refreshed");
+        assert_eq!(second.unwrap().unwrap().token, "refreshed");
+    });
 }
 
 #[test]
