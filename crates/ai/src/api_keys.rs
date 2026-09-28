@@ -546,7 +546,6 @@ pub struct ApiKeyManager {
     pub(crate) geap_last_mint_failure: Option<SystemTime>,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
-    aws_credentials_strategy_generation: u64,
     /// In-memory Gemini Enterprise (GEAP) credential state.
     pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
@@ -625,7 +624,6 @@ impl ApiKeyManager {
             geap_last_mint_failure: None,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
-            aws_credentials_strategy_generation: 0,
             geap_credentials_state: GeapCredentialsState::Missing,
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
@@ -963,17 +961,14 @@ impl ApiKeyManager {
     pub fn aws_credentials_refresh_strategy(&self) -> AwsCredentialsRefreshStrategy {
         self.aws_credentials_refresh_strategy.clone()
     }
-    pub fn aws_credentials_strategy_generation(&self) -> u64 {
-        self.aws_credentials_strategy_generation
-    }
 
     pub fn commit_aws_credentials_refresh(
         &mut self,
-        strategy_generation: u64,
+        strategy: &AwsCredentialsRefreshStrategy,
         state: AwsCredentialsState,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        if strategy_generation != self.aws_credentials_strategy_generation {
+        if strategy != &self.aws_credentials_refresh_strategy {
             return false;
         }
         self.set_aws_credentials_state(state, ctx);
@@ -988,9 +983,6 @@ impl ApiKeyManager {
         let strategy_changed = self.aws_credentials_refresh_strategy != strategy;
         let changed_to_oidc = strategy_changed
             && matches!(&strategy, AwsCredentialsRefreshStrategy::OidcManaged { .. });
-        if strategy_changed {
-            self.aws_credentials_strategy_generation += 1;
-        }
         self.aws_credentials_refresh_strategy = strategy;
         if changed_to_oidc {
             // The local chain can load the pod's runtime role before the task's Bedrock role is known.

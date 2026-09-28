@@ -283,8 +283,8 @@ pub(crate) fn refresh_local_chain_aws_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    let strategy_generation = manager.aws_credentials_strategy_generation();
-    match manager.aws_credentials_refresh_strategy() {
+    let strategy = manager.aws_credentials_refresh_strategy();
+    match &strategy {
         AwsCredentialsRefreshStrategy::LocalChain => {}
         AwsCredentialsRefreshStrategy::OidcManaged { .. } => {
             return Box::pin(async { Ok(()) });
@@ -325,7 +325,7 @@ pub(crate) fn refresh_local_chain_aws_credentials(
                     (state, Err(message))
                 }
             };
-            if manager.commit_aws_credentials_refresh(strategy_generation, new_state, ctx) {
+            if manager.commit_aws_credentials_refresh(&strategy, new_state, ctx) {
                 let _ = tx.send(tx_result);
             } else {
                 let _ = tx.send(Err("AWS credential refresh was superseded".to_string()));
@@ -345,7 +345,7 @@ pub(crate) fn refresh_aws_credentials_oidc(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    let strategy_generation = manager.aws_credentials_strategy_generation();
+    let strategy = manager.aws_credentials_refresh_strategy();
     // Skip if credentials are already loaded and have not yet expired.
     if let AwsCredentialsState::Loaded { credentials, .. } = manager.aws_credentials_state() {
         let still_valid = credentials
@@ -431,7 +431,7 @@ pub(crate) fn refresh_aws_credentials_oidc(
                     )
                 }
             };
-            if manager.commit_aws_credentials_refresh(strategy_generation, new_state, ctx) {
+            if manager.commit_aws_credentials_refresh(&strategy, new_state, ctx) {
                 if loaded_successfully {
                     log::info!("Bedrock OIDC: credentials loaded successfully");
                 }

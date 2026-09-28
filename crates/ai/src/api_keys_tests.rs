@@ -48,8 +48,8 @@ fn switching_to_oidc_clears_loaded_aws_credentials() {
 fn stale_aws_credential_refresh_cannot_overwrite_new_strategy_state() {
     warpui_core::App::test((), |mut app| async move {
         let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
-        let stale_generation = manager.read(&app, |manager, _| {
-            manager.aws_credentials_strategy_generation()
+        let stale_strategy = manager.read(&app, |manager, _| {
+            manager.aws_credentials_refresh_strategy()
         });
         let oidc_credentials = AwsCredentials::new(
             "oidc-access-key".into(),
@@ -76,7 +76,7 @@ fn stale_aws_credential_refresh_cannot_overwrite_new_strategy_state() {
             );
 
             let committed = manager.commit_aws_credentials_refresh(
-                stale_generation,
+                &stale_strategy,
                 AwsCredentialsState::Loaded {
                     credentials: AwsCredentials::new(
                         "runtime-access-key".into(),
@@ -223,7 +223,6 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         geap_last_mint_failure: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
-        aws_credentials_strategy_generation: 0,
         geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
