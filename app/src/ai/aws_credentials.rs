@@ -283,7 +283,10 @@ pub(crate) fn refresh_local_chain_aws_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    if manager.aws_credentials_refresh_strategy() == AwsCredentialsRefreshStrategy::OidcManaged {
+    if matches!(
+        manager.aws_credentials_refresh_strategy(),
+        AwsCredentialsRefreshStrategy::OidcManaged { .. }
+    ) {
         return Box::pin(async { Ok(()) });
     }
 

@@ -488,15 +488,20 @@ pub enum GrokRefreshOutcome {
     Failed,
 }
 
-/// Who refreshes the AWS credentials held by [`ApiKeyManager`].
+/// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AwsCredentialsRefreshStrategy {
-    /// Ambient triggers reload them from the local AWS credential chain (~/.aws).
+    /// Load credentials from the local AWS credential chain (~/.aws). This is the default.
     #[default]
     LocalChain,
-    /// An agent run mints them via OIDC/STS and refreshes them itself; ambient triggers must
-    /// leave them alone. Also forces them onto requests regardless of the per-user setting.
-    OidcManaged,
+    /// Credentials are managed externally via OIDC/STS.
+    /// The task ID is used to scope the STS AssumeRoleWithWebIdentity session.
+    /// The role ARN + region are the info used to assume the IAM role via STS.
+    OidcManaged {
+        task_id: Option<String>,
+        role_arn: String,
+        region: String,
+    },
 }
 
 struct CustomEndpointState {
@@ -960,8 +965,15 @@ impl ApiKeyManager {
     pub fn set_aws_credentials_refresh_strategy(
         &mut self,
         strategy: AwsCredentialsRefreshStrategy,
+        ctx: &mut ModelContext<Self>,
     ) {
+        let changed_to_oidc = self.aws_credentials_refresh_strategy != strategy
+            && matches!(&strategy, AwsCredentialsRefreshStrategy::OidcManaged { .. });
         self.aws_credentials_refresh_strategy = strategy;
+        if changed_to_oidc {
+            // The local chain can load the pod's runtime role before the task's Bedrock role is known.
+            self.set_aws_credentials_state(AwsCredentialsState::Missing, ctx);
+        }
     }
 
     /// Builds the `CustomModelProviders` registry that ships with every agent request.
@@ -1058,7 +1070,7 @@ impl ApiKeyManager {
         let include_aws = include_aws_bedrock_credentials
             || matches!(
                 self.aws_credentials_refresh_strategy,
-                AwsCredentialsRefreshStrategy::OidcManaged
+                AwsCredentialsRefreshStrategy::OidcManaged { .. }
             );
         let aws_credentials = include_aws
             .then(|| match self.aws_credentials_state {

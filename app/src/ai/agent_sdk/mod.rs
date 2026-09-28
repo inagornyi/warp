@@ -821,7 +821,12 @@ impl AgentDriverRunner {
                         ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                             // From here on, refresh credentials via OIDC federation only.
                             manager.set_aws_credentials_refresh_strategy(
-                                AwsCredentialsRefreshStrategy::OidcManaged,
+                                AwsCredentialsRefreshStrategy::OidcManaged {
+                                    task_id: Some(config.task_id.clone()),
+                                    role_arn: config.role_arn.clone(),
+                                    region: config.region.clone(),
+                                },
+                                ctx,
                             );
                             refresh_aws_credentials_oidc(config, request_scope, manager, ctx)
                         })
