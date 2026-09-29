@@ -51,7 +51,8 @@ pub struct SessionContext {
 }
 
 impl SessionContext {
-    /// Lists `directory` afresh, without caching host-only WSL listings for guest completions.
+    /// Lists `directory` afresh without permitting optional network-backed reads for local WSL
+    /// sessions. Host-only WSL listings are not cached for guest completions.
     pub(crate) async fn refresh_directory_entries(
         &self,
         directory: TypedPathBuf,
@@ -70,10 +71,10 @@ impl SessionContext {
     async fn list_directory_entries_internal(
         &self,
         directory: &TypedPath<'_>,
-        use_wsl_guest_listing: bool,
+        allow_network_reads: bool,
     ) -> Vec<EngineDirEntry> {
         #[cfg(not(windows))]
-        let _ = use_wsl_guest_listing;
+        let _ = allow_network_reads;
         match self.session.session_type() {
             SessionType::Local => {
                 // The host cannot resolve an `IO_REPARSE_TAG_LX_SYMLINK` over `\\wsl$`
@@ -84,7 +85,7 @@ impl SessionContext {
                 // up a host listing afterwards. A slow or failing guest falls back to the plain
                 // host listing below rather than emptying the completion list.
                 #[cfg(windows)]
-                if use_wsl_guest_listing
+                if allow_network_reads
                     && self.session.is_wsl()
                     && let Some(entries) = wsl_guest_listing::list_entries(self, directory).await
                 {
