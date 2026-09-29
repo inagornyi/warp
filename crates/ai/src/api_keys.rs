@@ -957,19 +957,6 @@ impl ApiKeyManager {
         self.aws_credentials_refresh_strategy.clone()
     }
 
-    pub fn commit_aws_credentials_refresh(
-        &mut self,
-        strategy: &AwsCredentialsRefreshStrategy,
-        state: AwsCredentialsState,
-        ctx: &mut ModelContext<Self>,
-    ) -> bool {
-        if strategy != &self.aws_credentials_refresh_strategy {
-            return false;
-        }
-        self.set_aws_credentials_state(state, ctx);
-        true
-    }
-
     pub fn set_aws_credentials_refresh_strategy(
         &mut self,
         strategy: AwsCredentialsRefreshStrategy,

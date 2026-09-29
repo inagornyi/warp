@@ -236,7 +236,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
                 let auth_command = &AISettings::as_ref(ctx).aws_bedrock_auth_refresh_command;
                 if command.trim().starts_with(auth_command.trim()) {
                     log::debug!("Detected AWS auth command completion, refreshing credentials");
-                    drop(refresh_local_chain_aws_credentials(manager, ctx));
+                    refresh_local_chain_aws_credentials(manager, ctx);
                 }
             }
         });
@@ -251,7 +251,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
                 UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
                     | UserWorkspacesEvent::TeamsChanged
             ) {
-                drop(refresh_local_chain_aws_credentials(manager, ctx));
+                refresh_local_chain_aws_credentials(manager, ctx);
             }
         });
 
@@ -263,7 +263,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
                     | AISettingsChangedEvent::AwsBedrockAuthRefreshCommand { .. }
                     | AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
             ) {
-                drop(refresh_local_chain_aws_credentials(manager, ctx));
+                refresh_local_chain_aws_credentials(manager, ctx);
             }
         });
     }
@@ -275,20 +275,12 @@ impl AwsCredentialRefresher for ApiKeyManager {
 /// refreshed by the agent driver, which holds the role, region, task id, and request scope. This
 /// runs from ambient triggers (team metadata, settings changes, the auth-command detector) and
 /// must not overwrite a live STS session with the local chain's answer.
-///
-/// Returns a future that resolves when the refresh completes. Subscription-triggered
-/// callers that don't need to wait should drop the returned future — the underlying
-/// work has already been scheduled on the executor by the time this returns.
 pub(crate) fn refresh_local_chain_aws_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
-) -> BoxFuture<'static, Result<(), String>> {
-    let strategy = manager.aws_credentials_refresh_strategy();
-    match &strategy {
-        AwsCredentialsRefreshStrategy::LocalChain => {}
-        AwsCredentialsRefreshStrategy::OidcManaged => {
-            return Box::pin(async { Ok(()) });
-        }
+) {
+    if manager.aws_credentials_refresh_strategy() == AwsCredentialsRefreshStrategy::OidcManaged {
+        return;
     }
 
     // Credential loading is a background `ApiKeyManager` job with no window behind it, and
@@ -299,43 +291,33 @@ pub(crate) fn refresh_local_chain_aws_credentials(
 
     if !is_available {
         manager.set_aws_credentials_state(AwsCredentialsState::Disabled, ctx);
-        return Box::pin(async { Ok(()) });
+        return;
     }
 
     let profile = (*AISettings::as_ref(ctx).aws_bedrock_profile).clone();
 
     manager.set_aws_credentials_state(AwsCredentialsState::Refreshing, ctx);
 
-    let (tx, rx) = channel();
     // credential fetch from aws cli's disk cache
     let _ = ctx.spawn(
         async move { load_aws_credentials_from_sdk(&profile).await },
         move |manager, result, ctx| {
-            let (new_state, tx_result) = match result {
-                Ok(credentials) => (
-                    AwsCredentialsState::Loaded {
-                        credentials,
-                        loaded_at: SystemTime::now(),
-                    },
-                    Ok(()),
-                ),
-                Err(err) => {
-                    let state = aws_credentials_state_for_error(err);
-                    let (_, message, _) = state.user_facing_components();
-                    (state, Err(message))
-                }
-            };
-            if manager.commit_aws_credentials_refresh(&strategy, new_state, ctx) {
-                let _ = tx.send(tx_result);
-            } else {
-                let _ = tx.send(Err("AWS credential refresh was superseded".to_string()));
+            // Ignore a local-chain result that completed after the agent driver switched to OIDC.
+            if manager.aws_credentials_refresh_strategy()
+                != AwsCredentialsRefreshStrategy::LocalChain
+            {
+                return;
             }
+            let new_state = match result {
+                Ok(credentials) => AwsCredentialsState::Loaded {
+                    credentials,
+                    loaded_at: SystemTime::now(),
+                },
+                Err(err) => aws_credentials_state_for_error(err),
+            };
+            manager.set_aws_credentials_state(new_state, ctx);
         },
     );
-    Box::pin(async move {
-        rx.await
-            .unwrap_or_else(|_| Err("Credential refresh was interrupted".to_string()))
-    })
 }
 
 /// Refreshes credentials via OIDC identity token + STS AssumeRoleWithWebIdentity.
@@ -345,7 +327,6 @@ pub(crate) fn refresh_aws_credentials_oidc(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    let strategy = manager.aws_credentials_refresh_strategy();
     // Skip if credentials are already loaded and have not yet expired.
     if let AwsCredentialsState::Loaded { credentials, .. } = manager.aws_credentials_state() {
         let still_valid = credentials
@@ -431,14 +412,11 @@ pub(crate) fn refresh_aws_credentials_oidc(
                     )
                 }
             };
-            if manager.commit_aws_credentials_refresh(&strategy, new_state, ctx) {
-                if loaded_successfully {
-                    log::info!("Bedrock OIDC: credentials loaded successfully");
-                }
-                let _ = tx.send(tx_result);
-            } else {
-                let _ = tx.send(Err("AWS credential refresh was superseded".to_string()));
+            manager.set_aws_credentials_state(new_state, ctx);
+            if loaded_successfully {
+                log::info!("Bedrock OIDC: credentials loaded successfully");
             }
+            let _ = tx.send(tx_result);
         },
     );
     Box::pin(async move {

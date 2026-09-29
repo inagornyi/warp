@@ -67,58 +67,6 @@ fn aws_credentials_are_cleared_only_when_refresh_strategy_changes() {
 }
 
 #[test]
-fn stale_aws_credential_refresh_cannot_overwrite_new_strategy_state() {
-    warpui_core::App::test((), |mut app| async move {
-        let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
-        let stale_strategy = manager.read(&app, |manager, _| {
-            manager.aws_credentials_refresh_strategy()
-        });
-        let oidc_credentials = AwsCredentials::new(
-            "oidc-access-key".into(),
-            "oidc-secret-key".into(),
-            Some("oidc-session-token".into()),
-            Some(SystemTime::now() + Duration::from_secs(3600)),
-        );
-
-        manager.update(&mut app, |manager, ctx| {
-            manager.set_aws_credentials_refresh_strategy(
-                AwsCredentialsRefreshStrategy::OidcManaged,
-                ctx,
-            );
-            manager.set_aws_credentials_state(
-                AwsCredentialsState::Loaded {
-                    credentials: oidc_credentials.clone(),
-                    loaded_at: SystemTime::now(),
-                },
-                ctx,
-            );
-
-            let committed = manager.commit_aws_credentials_refresh(
-                &stale_strategy,
-                AwsCredentialsState::Loaded {
-                    credentials: AwsCredentials::new(
-                        "runtime-access-key".into(),
-                        "runtime-secret-key".into(),
-                        Some("runtime-session-token".into()),
-                        Some(SystemTime::now() + Duration::from_secs(3600)),
-                    ),
-                    loaded_at: SystemTime::now(),
-                },
-                ctx,
-            );
-            assert!(!committed);
-        });
-
-        manager.read(&app, |manager, _| {
-            let AwsCredentialsState::Loaded { credentials, .. } = manager.aws_credentials_state()
-            else {
-                panic!("OIDC credentials should remain loaded");
-            };
-            assert_eq!(credentials, &oidc_credentials);
-        });
-    });
-}
-#[test]
 fn llm_provider_parses_supported_api_key_provider_names() {
     assert_eq!(
         LLMProvider::from_api_key_slug("anthropic"),
