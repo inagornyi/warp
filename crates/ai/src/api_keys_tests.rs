@@ -9,7 +9,7 @@ fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
 }
 #[test]
-fn switching_to_oidc_clears_loaded_aws_credentials() {
+fn aws_credentials_are_cleared_only_when_refresh_strategy_changes() {
     warpui_core::App::test((), |mut app| async move {
         let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
         let strategy = AwsCredentialsRefreshStrategy::OidcManaged {
@@ -17,21 +17,44 @@ fn switching_to_oidc_clears_loaded_aws_credentials() {
             role_arn: "arn:aws:iam::123456789012:role/Bedrock".into(),
             region: "us-east-1".into(),
         };
+        let credentials = AwsCredentials::new(
+            "access-key".into(),
+            "secret-key".into(),
+            Some("session-token".into()),
+            Some(SystemTime::now() + Duration::from_secs(3600)),
+        );
 
         manager.update(&mut app, |manager, ctx| {
             manager.set_aws_credentials_state(
                 AwsCredentialsState::Loaded {
-                    credentials: AwsCredentials::new(
-                        "access-key".into(),
-                        "secret-key".into(),
-                        Some("session-token".into()),
-                        Some(SystemTime::now() + Duration::from_secs(3600)),
-                    ),
+                    credentials: credentials.clone(),
                     loaded_at: SystemTime::now(),
                 },
                 ctx,
             );
             manager.set_aws_credentials_refresh_strategy(strategy.clone(), ctx);
+            assert_eq!(
+                manager.aws_credentials_state(),
+                &AwsCredentialsState::Missing
+            );
+
+            manager.set_aws_credentials_state(
+                AwsCredentialsState::Loaded {
+                    credentials: credentials.clone(),
+                    loaded_at: SystemTime::now(),
+                },
+                ctx,
+            );
+            manager.set_aws_credentials_refresh_strategy(strategy.clone(), ctx);
+            assert!(matches!(
+                manager.aws_credentials_state(),
+                AwsCredentialsState::Loaded { .. }
+            ));
+
+            manager.set_aws_credentials_refresh_strategy(
+                AwsCredentialsRefreshStrategy::LocalChain,
+                ctx,
+            );
         });
 
         manager.read(&app, |manager, _| {
@@ -39,7 +62,10 @@ fn switching_to_oidc_clears_loaded_aws_credentials() {
                 manager.aws_credentials_state(),
                 &AwsCredentialsState::Missing
             );
-            assert_eq!(manager.aws_credentials_refresh_strategy(), strategy);
+            assert_eq!(
+                manager.aws_credentials_refresh_strategy(),
+                AwsCredentialsRefreshStrategy::LocalChain
+            );
         });
     });
 }

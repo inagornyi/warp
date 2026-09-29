@@ -980,12 +980,8 @@ impl ApiKeyManager {
         strategy: AwsCredentialsRefreshStrategy,
         ctx: &mut ModelContext<Self>,
     ) {
-        let strategy_changed = self.aws_credentials_refresh_strategy != strategy;
-        let changed_to_oidc = strategy_changed
-            && matches!(&strategy, AwsCredentialsRefreshStrategy::OidcManaged { .. });
-        self.aws_credentials_refresh_strategy = strategy;
-        if changed_to_oidc {
-            // The local chain can load the pod's runtime role before the task's Bedrock role is known.
+        if self.aws_credentials_refresh_strategy != strategy {
+            self.aws_credentials_refresh_strategy = strategy;
             self.set_aws_credentials_state(AwsCredentialsState::Missing, ctx);
         }
     }
