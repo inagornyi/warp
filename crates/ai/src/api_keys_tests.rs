@@ -12,11 +12,7 @@ fn make_manager(keys: ApiKeys) -> ApiKeyManager {
 fn aws_credentials_are_cleared_only_when_refresh_strategy_changes() {
     warpui_core::App::test((), |mut app| async move {
         let manager = app.add_singleton_model(|_| make_manager(ApiKeys::default()));
-        let strategy = AwsCredentialsRefreshStrategy::OidcManaged {
-            task_id: Some("task-1".into()),
-            role_arn: "arn:aws:iam::123456789012:role/Bedrock".into(),
-            region: "us-east-1".into(),
-        };
+        let strategy = AwsCredentialsRefreshStrategy::OidcManaged;
         let credentials = AwsCredentials::new(
             "access-key".into(),
             "secret-key".into(),
@@ -86,11 +82,7 @@ fn stale_aws_credential_refresh_cannot_overwrite_new_strategy_state() {
 
         manager.update(&mut app, |manager, ctx| {
             manager.set_aws_credentials_refresh_strategy(
-                AwsCredentialsRefreshStrategy::OidcManaged {
-                    task_id: Some("task-1".into()),
-                    role_arn: "arn:aws:iam::123456789012:role/Bedrock".into(),
-                    region: "us-east-1".into(),
-                },
+                AwsCredentialsRefreshStrategy::OidcManaged,
                 ctx,
             );
             manager.set_aws_credentials_state(

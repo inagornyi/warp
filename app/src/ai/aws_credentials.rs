@@ -286,7 +286,7 @@ pub(crate) fn refresh_local_chain_aws_credentials(
     let strategy = manager.aws_credentials_refresh_strategy();
     match &strategy {
         AwsCredentialsRefreshStrategy::LocalChain => {}
-        AwsCredentialsRefreshStrategy::OidcManaged { .. } => {
+        AwsCredentialsRefreshStrategy::OidcManaged => {
             return Box::pin(async { Ok(()) });
         }
     }
